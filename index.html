@@ -1,0 +1,284 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SinPack — Gerador de Dieline (tuck-end)</title>
+<style>
+  :root { --bg:#0f1419; --panel:#1b232c; --ink:#e6edf3; --muted:#9aa7b2; --accent:#E5007E; }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family:system-ui,sans-serif; background:var(--bg); color:var(--ink); }
+  header { padding:18px 24px; border-bottom:1px solid #2a3744; }
+  header h1 { margin:0; font-size:18px; }
+  header p { margin:4px 0 0; color:var(--muted); font-size:13px; }
+  .wrap { display:flex; gap:20px; padding:20px; flex-wrap:wrap; }
+  .controls { background:var(--panel); border-radius:10px; padding:18px; width:320px; flex:0 0 auto; }
+  .controls h2 { font-size:13px; text-transform:uppercase; letter-spacing:.05em; color:var(--muted); margin:0 0 10px; }
+  label { display:block; font-size:13px; margin:10px 0 4px; }
+  input[type=number] { width:100%; padding:8px; border-radius:6px; border:1px solid #38454f; background:#0f1620; color:var(--ink); font-size:14px; }
+  .row { display:flex; gap:10px; }
+  .row > div { flex:1; }
+  details { margin-top:14px; border-top:1px solid #2a3744; padding-top:10px; }
+  summary { cursor:pointer; font-size:13px; color:var(--muted); }
+  .chk { display:flex; align-items:center; gap:8px; margin:8px 0; font-size:13px; }
+  .chk input { width:auto; }
+  button { margin-top:16px; width:100%; padding:11px; border:0; border-radius:8px; background:var(--accent); color:#fff; font-size:14px; font-weight:600; cursor:pointer; }
+  button.secondary { background:#2a3744; }
+  .preview { flex:1; min-width:340px; background:#fff; border-radius:10px; padding:16px; overflow:auto; }
+  .preview svg { width:100%; height:auto; }
+  .iso { margin-top:14px; }
+  .iso svg { width:100%; height:auto; }
+  .hint { color:var(--muted); font-size:12px; margin-top:6px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>SinPack — Gerador de Dieline (cartucho tuck-end)</h1>
+  <p>Lingueta de trava arredondada (tongue-and-slit) · saída SVG em escala real (mm)</p>
+</header>
+<div class="wrap">
+  <div class="controls">
+    <h2>Medidas principais (mm)</h2>
+    <label>Comprimento (C)</label>
+    <input id="C" type="number" value="116" min="20" step="1">
+    <div class="row">
+      <div><label>Largura (L)</label><input id="L" type="number" value="30" min="10" step="1"></div>
+      <div><label>Altura (A)</label><input id="A" type="number" value="20" min="8" step="1"></div>
+    </div>
+    <div class="iso" id="iso"></div>
+
+    <details>
+      <summary>Opções avançadas</summary>
+      <label>Espessura do material</label>
+      <input id="esp" type="number" value="0.4" step="0.05">
+      <label>Largura da aba de cola (vazio = auto)</label>
+      <input id="cola" type="number" placeholder="auto" step="0.5">
+      <label>Sangria / bleed</label>
+      <input id="bleed" type="number" value="0" step="0.5">
+      <div class="chk"><input type="checkbox" id="travas" checked><label style="margin:0">Trava tongue-and-slit</label></div>
+      <div class="chk"><input type="checkbox" id="slit" checked><label style="margin:0">Slit-lock / recorte de dedo</label></div>
+      <div class="chk"><input type="checkbox" id="cotas" checked><label style="margin:0">Mostrar cotas/rótulos</label></div>
+    </details>
+
+    <button onclick="download(false)">⬇ Baixar SVG</button>
+    <button class="secondary" onclick="download(true)">⬇ Baixar SVG limpo (só faca+vinco)</button>
+    <p class="hint">O SVG abre no CorelDRAW/Illustrator na escala exata em mm.</p>
+  </div>
+
+  <div class="preview" id="preview"></div>
+</div>
+
+<script>
+// =====================================================================
+// SinPack — núcleo de geometria (porta fiel de dieline.py para JS)
+// =====================================================================
+const STYLE = {
+  cut:        {stroke:"#E5007E", w:0.25, dash:null},
+  crease:     {stroke:"#96989A", w:0.25, dash:"2,1.2"},
+  crease_red: {stroke:"#ED3237", w:0.25, dash:"2,1.2"},
+  construct:  {stroke:"#9aa0a6", w:0.15, dash:"0.4,1.0"},
+  dim:        {stroke:"#3a7bd5", w:0.2,  dash:null},
+};
+const clamp = (v,lo,hi)=>{ if(hi<lo)[lo,hi]=[hi,lo]; return Math.max(lo,Math.min(hi,v)); };
+
+function resolved(s){
+  const {C,L,A,t}=s;
+  const r = {...s};
+  r.aba_cola  = s.aba_cola ?? clamp(Math.min(L,A)*0.55, 6, 18);
+  r.prof_tuck = s.prof_tuck ?? Math.max(A-1.5*t, 4.0);
+  r.prof_dust = s.prof_dust ?? clamp(Math.min(A*0.85, L/2-1.5*t), 4.0, Math.max(A,6));
+  r.raio      = s.raio ?? clamp(Math.min(L,A)*0.18, 1.5, 6.0);
+  r.tongue_len= s.tongue_len ?? clamp(Math.min(L,A)*0.06, 1.2, 3.5);
+  r.tongue_w  = s.tongue_w ?? clamp(L*0.11, 3.0, 10.0);
+  r.slit_w    = s.slit_w ?? clamp(A*0.5, 4.0, 14.0);
+  r.slit_h    = s.slit_h ?? clamp(L*0.28, 6.0, 22.0);
+  return r;
+}
+
+function layout(spec){
+  const s = resolved(spec);
+  const {C,L,A}=s;
+  const fmax = Math.max(s.prof_tuck + (s.travas? s.tongue_len:0), s.prof_dust);
+  const M = s.margem + s.bleed;
+  const x0=M+fmax, xC=x0+C, y_top=M;
+  const yF=y_top+L, ySt=yF+A, yB=ySt+L, ySb=yB+A, yG=ySb+s.aba_cola;
+  return {s, x0, xC, y_top, yF, ySt, yB, ySb, yG,
+          width:xC+fmax+M, height:yG+M};
+}
+
+function roundedPath(verts, closed=true){
+  const n=verts.length; if(n<2) return "";
+  const pts=verts.map(v=>[v[0],v[1]]), rads=verts.map(v=>v[2]);
+  const sub=(a,b)=>[a[0]-b[0],a[1]-b[1]];
+  const norm=a=>{const d=Math.hypot(a[0],a[1]); return d===0?[0,0]:[a[0]/d,a[1]/d];};
+  const dist=(a,b)=>Math.hypot(a[0]-b[0],a[1]-b[1]);
+  const A=[],B=[];
+  for(let i=0;i<n;i++){
+    const vp=pts[(i-1+n)%n], vi=pts[i], vn=pts[(i+1)%n], r=rads[i];
+    if(r<=0){A.push(vi);B.push(vi);continue;}
+    const din=norm(sub(vi,vp)), dout=norm(sub(vn,vi));
+    const cut=Math.min(r,0.5*dist(vp,vi),0.5*dist(vi,vn));
+    A.push([vi[0]-din[0]*cut, vi[1]-din[1]*cut]);
+    B.push([vi[0]+dout[0]*cut, vi[1]+dout[1]*cut]);
+  }
+  const f=x=>x.toFixed(4);
+  if(closed){
+    let d=[`M ${f(B[n-1][0])} ${f(B[n-1][1])}`];
+    for(let i=0;i<n;i++){ d.push(`L ${f(A[i][0])} ${f(A[i][1])}`);
+      if(rads[i]>0) d.push(`Q ${f(pts[i][0])} ${f(pts[i][1])} ${f(B[i][0])} ${f(B[i][1])}`); }
+    d.push("Z"); return d.join(" ");
+  }
+}
+
+function lockFlap(lo,y1,y2,sign){
+  const s=lo.s, xb=sign>0?lo.xC:lo.x0, d=s.prof_tuck;
+  const tl=s.travas?s.tongue_len:0, r=s.raio, gap=s.t+0.6, h=y2-y1;
+  const ya=y1+gap, yb=y2-gap, thw=s.tongue_w/2;
+  const yt1=y1+h*0.27, yt2=y1+h*0.73, ox=dd=>xb+sign*dd;
+  const rn=tl>0?Math.min(0.8,tl*0.4):0;
+  const body=ox(d), tip=ox(d+tl), mid=ox(d+tl*0.30);
+  const v=[[xb,ya,0],[body,ya,r]];
+  if(tl>0){
+    v.push([body,yt1-thw,rn],[tip,yt1-thw,rn],[tip,yt1+thw,rn],[body,yt1+thw,rn]);
+    v.push([mid,(yt1+yt2)/2,r]);
+    v.push([body,yt2-thw,rn],[tip,yt2-thw,rn],[tip,yt2+thw,rn],[body,yt2+thw,rn]);
+  }
+  v.push([body,yb,r],[xb,yb,0]);
+  return v;
+}
+function dustFlap(lo,y1,y2,sign,depth){
+  const s=lo.s, xb=sign>0?lo.xC:lo.x0, r=s.raio, gap=s.t+0.6;
+  const ya=y1+gap, yb=y2-gap, ox=xb+sign*depth;
+  return [[xb,ya,0],[ox,ya,r],[ox,yb,r],[xb,yb,0]];
+}
+
+function outlineVerts(lo){
+  const s=lo.s, {x0,xC,y_top:yt,yF,ySt,yB,ySb,yG}=lo, ch=s.raio, dust=s.prof_dust;
+  let v=[[x0+ch,yt,ch],[xC-ch,yt,ch]];
+  v=v.concat(lockFlap(lo,yt,yF,1), dustFlap(lo,yF,ySt,1,dust),
+             dustFlap(lo,ySt,yB,1,dust), dustFlap(lo,yB,ySb,1,dust));
+  const gc=Math.min(s.aba_cola,6.0);
+  v.push([xC,ySb,0],[xC-gc,yG,s.raio*0.5],[x0+gc,yG,s.raio*0.5],[x0,ySb,0]);
+  v=v.concat(dustFlap(lo,yB,ySb,-1,dust).reverse(), dustFlap(lo,ySt,yB,-1,dust).reverse(),
+             dustFlap(lo,yF,ySt,-1,dust).reverse(), lockFlap(lo,yt,yF,-1).reverse());
+  return v;
+}
+
+const line=(x1,y1,x2,y2)=>`M ${x1.toFixed(4)} ${y1.toFixed(4)} L ${x2.toFixed(4)} ${y2.toFixed(4)}`;
+
+function slitLock(lo,sign){
+  const s=lo.s, xb=sign>0?lo.xC:lo.x0, cy=(lo.ySt+lo.yB)/2;
+  const inset=s.prof_dust*0.45+3, cx=xb-sign*inset, w=s.slit_w, hh=s.slit_h;
+  const cuts=[], creases=[];
+  const bow=sign*w*0.5;
+  const top=[cx-bow*0.15, cy-hh/2], bot=[cx-bow*0.15, cy+hh/2], ctrl=[cx+bow,cy];
+  cuts.push(`M ${top[0].toFixed(4)} ${top[1].toFixed(4)} Q ${ctrl[0].toFixed(4)} ${ctrl[1].toFixed(4)} ${bot[0].toFixed(4)} ${bot[1].toFixed(4)}`);
+  const tick=sign*2.2;
+  cuts.push(line(top[0],top[1],top[0]-tick,top[1]));
+  cuts.push(line(bot[0],bot[1],bot[0]-tick,bot[1]));
+  let rx1=cx-sign*(w*0.55), rx2=cx+sign*(w*0.95);
+  let ry1=cy-hh*0.62, ry2=cy+hh*0.62;
+  [rx1,rx2]=[Math.min(rx1,rx2),Math.max(rx1,rx2)];
+  creases.push(`M ${rx1.toFixed(4)} ${ry1.toFixed(4)} L ${rx2.toFixed(4)} ${ry1.toFixed(4)} L ${rx2.toFixed(4)} ${ry2.toFixed(4)} L ${rx1.toFixed(4)} ${ry2.toFixed(4)} Z`);
+  return {cuts,creases};
+}
+function tongueSlits(lo,sign){
+  const s=lo.s, xb=sign>0?lo.xC:lo.x0, y1=lo.ySt, y2=lo.yB, h=y2-y1;
+  const yt1=y1+h*0.27, yt2=y1+h*0.73, inset=2.5+s.t, sx=xb-sign*inset, sw=s.tongue_w+2*s.t;
+  return [line(sx,yt1-sw/2,sx,yt1+sw/2), line(sx,yt2-sw/2,sx,yt2+sw/2)];
+}
+
+function styleAttr(name){
+  const st=STYLE[name];
+  return `fill:none;stroke:${st.stroke};stroke-width:${st.w}`+(st.dash?`;stroke-dasharray:${st.dash}`:"");
+}
+
+function renderSVG(spec, clean=false){
+  const lo=layout(spec), s=lo.s, W=lo.width, H=lo.height;
+  const creases=[], cuts=[], construct=[];
+  for(const y of [lo.yF,lo.ySt,lo.yB]) creases.push([line(lo.x0,y,lo.xC,y),"crease"]);
+  creases.push([line(lo.x0,lo.ySb,lo.xC,lo.ySb),"crease_red"]);
+  const gap=s.t+0.6;
+  for(const [y1,y2] of [[lo.y_top,lo.yF],[lo.yF,lo.ySt],[lo.ySt,lo.yB],[lo.yB,lo.ySb]])
+    for(const x of [lo.x0,lo.xC]) creases.push([line(x,y1+gap,x,y2-gap),"crease"]);
+  if(s.travas) for(const sg of [1,-1]) for(const p of tongueSlits(lo,sg)) cuts.push([p,"cut"]);
+  if(s.slit_lock) for(const sg of [1,-1]){ const r=slitLock(lo,sg);
+    r.cuts.forEach(p=>cuts.push([p,"cut"])); r.creases.forEach(p=>creases.push([p,"crease"])); }
+  construct.push([line(lo.x0, lo.ySt+(lo.yB-lo.ySt)*0.18, lo.xC, lo.ySt+(lo.yB-lo.ySt)*0.18),"construct"]);
+
+  const o=[];
+  o.push('<?xml version="1.0" encoding="UTF-8" standalone="no"?>');
+  o.push(`<svg xmlns="http://www.w3.org/2000/svg" xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape" version="1.1" width="${W.toFixed(3)}mm" height="${H.toFixed(3)}mm" viewBox="0 0 ${W.toFixed(3)} ${H.toFixed(3)}">`);
+  o.push(`<title>SinPack dieline ${s.C}x${s.L}x${s.A} mm</title>`);
+  o.push('<style>');
+  o.push(`.corte{${styleAttr("cut")}} .vinco{${styleAttr("crease")}} .vinco-cola{${styleAttr("crease_red")}} .construcao{${styleAttr("construct")}} .cota{${styleAttr("dim")}} text{font-family:sans-serif;fill:#3a7bd5;}`);
+  o.push('</style>');
+  if(s.bleed>0) o.push(`<rect x="${s.bleed}" y="${s.bleed}" width="${(W-2*s.bleed).toFixed(3)}" height="${(H-2*s.bleed).toFixed(3)}" fill="none" stroke="#ccc" stroke-width="0.1" stroke-dasharray="1,1"/>`);
+  o.push('<g id="vinco" inkscape:groupmode="layer" inkscape:label="vinco">');
+  for(const [p,st] of creases) o.push(`<path class="${st==='crease_red'?'vinco-cola':'vinco'}" d="${p}"/>`);
+  o.push('</g>');
+  if(!clean){ o.push('<g id="construcao" inkscape:groupmode="layer" inkscape:label="construcao">');
+    for(const [p] of construct) o.push(`<path class="construcao" d="${p}"/>`); o.push('</g>'); }
+  o.push('<g id="corte" inkscape:groupmode="layer" inkscape:label="corte">');
+  o.push(`<path class="corte" d="${roundedPath(outlineVerts(lo),true)}"/>`);
+  for(const [p] of cuts) o.push(`<path class="corte" d="${p}"/>`);
+  o.push('</g>');
+  if(s.cotas && !clean){
+    const fs=Math.max(3.0, Math.min(W,H)*0.02);
+    o.push('<g id="cotas" inkscape:groupmode="layer" inkscape:label="cotas">');
+    o.push(`<path class="cota" d="M ${lo.x0} ${lo.y_top-4} L ${lo.xC} ${lo.y_top-4}"/><text x="${(lo.x0+lo.xC)/2}" y="${lo.y_top-5}" font-size="${fs.toFixed(2)}" text-anchor="middle">C = ${s.C} mm</text>`);
+    o.push(`<path class="cota" d="M ${lo.x0-4} ${lo.y_top} L ${lo.x0-4} ${lo.yF}"/><text x="${lo.x0-5}" y="${(lo.y_top+lo.yF)/2}" font-size="${fs.toFixed(2)}" text-anchor="middle" transform="rotate(-90 ${lo.x0-5} ${(lo.y_top+lo.yF)/2})">L=${s.L}</text>`);
+    o.push(`<path class="cota" d="M ${lo.x0-4} ${lo.yF} L ${lo.x0-4} ${lo.ySt}"/><text x="${lo.x0-5}" y="${(lo.yF+lo.ySt)/2}" font-size="${fs.toFixed(2)}" text-anchor="middle" transform="rotate(-90 ${lo.x0-5} ${(lo.yF+lo.ySt)/2})">A=${s.A}</text>`);
+    o.push('</g>');
+  }
+  o.push('</svg>');
+  return o.join("\n");
+}
+
+// ---- UI ----
+function readSpec(){
+  const num=(id)=>{const v=parseFloat(document.getElementById(id).value); return isNaN(v)?null:v;};
+  return {
+    C:num('C'), L:num('L'), A:num('A'),
+    t:num('esp')??0.4, espessura:num('esp')??0.4,
+    aba_cola:num('cola'), prof_tuck:null, prof_dust:null, raio:null,
+    tongue_len:null, tongue_w:null, slit_w:null, slit_h:null,
+    travas:document.getElementById('travas').checked,
+    slit_lock:document.getElementById('slit').checked,
+    cotas:document.getElementById('cotas').checked,
+    bleed:num('bleed')??0, registro:false, margem:8.0,
+  };
+}
+function refresh(){
+  const spec=readSpec();
+  if(!spec.C||!spec.L||!spec.A) return;
+  document.getElementById('preview').innerHTML = renderSVG(spec,false);
+}
+function download(clean){
+  const spec=readSpec();
+  if(!spec.C||!spec.L||!spec.A){ alert("Preencha C, L e A."); return; }
+  const svg=renderSVG(spec,clean);
+  const blob=new Blob([svg],{type:"image/svg+xml"});
+  const a=document.createElement('a');
+  a.href=URL.createObjectURL(blob);
+  a.download=`dieline_${spec.C}x${spec.L}x${spec.A}${clean?'_limpo':''}.svg`;
+  a.click(); URL.revokeObjectURL(a.href);
+}
+// diagrama isométrico simples mostrando C/L/A
+document.getElementById('iso').innerHTML = `
+<svg viewBox="0 0 240 140">
+  <g fill="none" stroke="#9aa7b2" stroke-width="1.5">
+    <path d="M40 50 L160 50 L200 30 L80 30 Z"/>
+    <path d="M40 50 L40 110 L160 110 L160 50"/>
+    <path d="M160 50 L200 30 L200 90 L160 110"/>
+  </g>
+  <text x="100" y="125" fill="#E5007E" font-size="12" text-anchor="middle">C (Comprimento)</text>
+  <text x="20" y="83" fill="#3a7bd5" font-size="12" text-anchor="middle" transform="rotate(-90 20 83)">L (Largura)</text>
+  <text x="208" y="60" fill="#3a7bd5" font-size="11">A</text>
+</svg>`;
+['C','L','A','esp','cola','bleed'].forEach(id=>document.getElementById(id).addEventListener('input',refresh));
+['travas','slit','cotas'].forEach(id=>document.getElementById(id).addEventListener('change',refresh));
+refresh();
+</script>
+</body>
+</html>
